@@ -1,0 +1,347 @@
+import React, { useState } from 'react';
+import { StyleSheet, ScrollView, View, Text, Pressable, Alert } from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useToast } from '@/components/toast';
+import { useTheme } from '@/hooks/use-theme';
+import { BackgroundGradient } from '@/components/background-gradient';
+import { TransparentCard } from '@/components/transparent-card';
+import { DeliveryProgressTracker } from '@/components/delivery-progress-tracker';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { supabase } from '@/lib/supabase';
+import { getCurrentUserPharmacy } from '@/lib/auth';
+
+// Create styles function that uses theme values
+const createStyles = (theme: ReturnType<typeof useTheme>) => StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  contentContainer: {
+    padding: theme.spacing.screenPadding,
+    paddingBottom: 80, // Account for floating nav bar
+  },
+  headerSection: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: theme.spacing.componentGap,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: theme.borderRadius.round,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  title: {
+    ...theme.typography.h2,
+    marginBottom: theme.spacing.componentGap,
+  },
+  summaryCard: {
+    padding: theme.spacing.md,
+    marginBottom: theme.spacing.lg,
+  },
+  summaryCardTitle: {
+    ...theme.typography.body,
+    fontFamily: theme.fonts.semiBold,
+    color: theme.colors.text,
+    marginBottom: theme.spacing.md,
+  },
+  summarySection: {
+    marginBottom: theme.spacing.md,
+  },
+  summarySectionTitle: {
+    ...theme.typography.bodySmall,
+    fontFamily: theme.fonts.medium,
+    color: theme.colors.textSecondary,
+    marginBottom: theme.spacing.xs,
+  },
+  summarySectionValue: {
+    ...theme.typography.body,
+    color: theme.colors.text,
+    marginBottom: theme.spacing.sm,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: theme.colors.transparentCard,
+    marginVertical: theme.spacing.md,
+  },
+  submitButton: {
+    backgroundColor: theme.colors.status.pickedUp,
+    padding: theme.spacing.md,
+    borderRadius: theme.borderRadius.round,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: theme.spacing.lg,
+    marginBottom: theme.spacing.md,
+  },
+  submitButtonText: {
+    ...theme.typography.body,
+    fontFamily: theme.fonts.medium,
+    color: theme.colors.text,
+  },
+  submitButtonDisabled: {
+    opacity: 0.5,
+  },
+});
+
+export default function AddDeliverySummaryScreen() {
+  const theme = useTheme();
+  const styles = createStyles(theme);
+  const params = useLocalSearchParams();
+  const [submitting, setSubmitting] = useState(false);
+  const toast = useToast();
+
+  // Parse the data from route params
+  const patientId = params.patientId as string || '';
+  const customerName = params.customerName as string || 'N/A';
+  const customerId = params.customerId as string || 'N/A';
+  const customerPhone = params.customerPhone as string || 'N/A';
+  const deliveryAddress = params.deliveryAddress as string || 'N/A';
+  const deliveryDate = params.deliveryDate as string || 'N/A';
+  const deliveryTime = params.deliveryTime as string || 'N/A';
+  const deliveryDateTime = params.deliveryDateTime as string || '';
+  const recipientName = params.recipientName as string || '';
+  const medicationSchedule = params.medicationSchedule as string || '';
+  const coldChainRequired = params.coldChainRequired as string || 'false';
+
+  // Format schedule display
+  const getScheduleDisplay = (schedule: string) => {
+    switch (schedule) {
+      case 'unscheduled':
+        return 'Unscheduled';
+      case 'schedule-1-2':
+        return 'Schedule 1-2 (Over the counter)';
+      case 'schedule-3-5':
+        return 'Schedule 3-5 (Prescription)';
+      case 'schedule-6':
+        return 'Schedule 6 (Controlled substance)';
+      default:
+        return schedule;
+    }
+  };
+
+  const handleSubmit = async () => {
+    // Validate required fields
+    if (!patientId) {
+      toast.error('Patient ID is missing. Please go back and select a patient.');
+      return;
+    }
+
+    if (!medicationSchedule) {
+      toast.error('Medication schedule is missing. Please go back and select a schedule.');
+      return;
+    }
+
+    if (!deliveryDateTime) {
+      toast.error('Delivery date/time is missing. Please go back and select a date and time.');
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+
+      // Get pharmacy and pharmacist info
+      const { pharmacyId, pharmacistId } = await getCurrentUserPharmacy();
+
+      // Parse delivery date/time
+      const deliveryDateTimeObj = new Date(deliveryDateTime);
+
+      // Parse cold chain boolean
+      const coldChain = coldChainRequired === 'true';
+
+      // Insert delivery into database
+      // Note: order_id will be auto-generated by database trigger
+      const { data: newDelivery, error } = await supabase
+        .from('delivery')
+        .insert({
+          pharmacy_id: pharmacyId,
+          pharmacist_id: pharmacistId,
+          patient_id: parseInt(patientId, 10),
+          address: deliveryAddress,
+          delivery_date_time: deliveryDateTimeObj.toISOString(),
+          medication_schedule: medicationSchedule,
+          cold_chain: coldChain,
+          status: 'pending',
+          recipient_name: recipientName || '', // Use empty string if not provided
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error creating delivery:', error);
+        toast.error(error.message || 'Failed to create delivery. Please try again.');
+        return;
+      }
+
+      // Success - navigate to home
+      toast.success(`Delivery created! Order ID: ${newDelivery.order_id || 'N/A'}`);
+      router.push('/(tabs)/' as any);
+    } catch (error: any) {
+      console.error('Error creating delivery:', error);
+      toast.error(error?.message || 'An unexpected error occurred. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <BackgroundGradient style={styles.container}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header Section */}
+        <View style={styles.headerSection}>
+          {/* Back Button */}
+          <TransparentCard
+            style={styles.backButton}
+            interactive={true}
+            onPress={() => router.push({
+              pathname: '/(tabs)/add-delivery-medication',
+              params: {
+                patientId: patientId,
+                customerName: customerName,
+                customerId: customerId,
+                customerPhone: customerPhone,
+                deliveryAddress: deliveryAddress,
+                deliveryDate: deliveryDate,
+                deliveryTime: deliveryTime,
+                deliveryDateTime: deliveryDateTime,
+                recipientName: recipientName,
+              },
+            })}
+          >
+            <MaterialIcons
+              name="arrow-back"
+              size={theme.iconSizes.header}
+              color={theme.colors.text}
+            />
+          </TransparentCard>
+        </View>
+
+        {/* Title */}
+        <Text style={[
+          styles.title,
+          { color: theme.colors.text }
+        ]}>Delivery Summary</Text>
+
+        {/* Customer Information Card */}
+        <TransparentCard style={styles.summaryCard}>
+          <Text style={styles.summaryCardTitle}>Customer Information</Text>
+          
+          <View style={styles.summarySection}>
+            <Text style={styles.summarySectionTitle}>Customer Name</Text>
+            <Text style={styles.summarySectionValue}>{customerName}</Text>
+          </View>
+
+          <View style={styles.summarySection}>
+            <Text style={styles.summarySectionTitle}>Customer ID</Text>
+            <Text style={styles.summarySectionValue}>{customerId}</Text>
+          </View>
+
+          <View style={styles.summarySection}>
+            <Text style={styles.summarySectionTitle}>Phone Number</Text>
+            <Text style={styles.summarySectionValue}>{customerPhone}</Text>
+          </View>
+
+          <View style={styles.divider} />
+
+          <View style={styles.summarySection}>
+            <Text style={styles.summarySectionTitle}>Delivery Address</Text>
+            <Text style={styles.summarySectionValue}>{deliveryAddress}</Text>
+          </View>
+
+          {recipientName && (
+            <>
+              <View style={styles.divider} />
+              <View style={styles.summarySection}>
+                <Text style={styles.summarySectionTitle}>Recipient Name</Text>
+                <Text style={styles.summarySectionValue}>{recipientName}</Text>
+              </View>
+            </>
+          )}
+        </TransparentCard>
+
+        {/* Delivery Details Card */}
+        <TransparentCard style={styles.summaryCard}>
+          <Text style={styles.summaryCardTitle}>Delivery Details</Text>
+          
+          <View style={styles.summarySection}>
+            <Text style={styles.summarySectionTitle}>Delivery Date</Text>
+            <Text style={styles.summarySectionValue}>{deliveryDate}</Text>
+          </View>
+
+          <View style={styles.summarySection}>
+            <Text style={styles.summarySectionTitle}>Delivery Time</Text>
+            <Text style={styles.summarySectionValue}>{deliveryTime}</Text>
+          </View>
+        </TransparentCard>
+
+        {/* Medication Information Card */}
+        <TransparentCard style={styles.summaryCard}>
+          <Text style={styles.summaryCardTitle}>Medication Information</Text>
+          
+          <View style={styles.summarySection}>
+            <Text style={styles.summarySectionTitle}>Medication Schedule</Text>
+            <Text style={styles.summarySectionValue}>{getScheduleDisplay(medicationSchedule)}</Text>
+          </View>
+
+          <View style={styles.divider} />
+
+          <View style={styles.summarySection}>
+            <Text style={styles.summarySectionTitle}>Cold Chain Required</Text>
+            <Text style={styles.summarySectionValue}>
+              {coldChainRequired === 'true' ? 'Yes' : 'No'}
+            </Text>
+          </View>
+
+          {coldChainRequired === 'true' && (
+            <>
+              <View style={styles.divider} />
+              <View style={[styles.summarySection, {
+                padding: theme.spacing.md,
+                borderRadius: theme.borderRadius.md,
+                backgroundColor: theme.colors.status.info,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: theme.spacing.sm,
+              }]}>
+                <MaterialIcons
+                  name="info"
+                  size={theme.iconSizes.md}
+                  color={theme.colors.status.infoText}
+                />
+                <Text style={[styles.summarySectionValue, {
+                  color: theme.colors.status.infoText,
+                  flex: 1,
+                }]}>
+                  Temperature monitoring required (2-8 degrees celcius)
+                </Text>
+              </View>
+            </>
+          )}
+        </TransparentCard>
+
+        {/* Submit Button */}
+        <Pressable
+          style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
+          onPress={handleSubmit}
+          disabled={submitting}
+        >
+          <Text style={styles.submitButtonText}>
+            {submitting ? 'Submitting...' : 'Submit Delivery'}
+          </Text>
+        </Pressable>
+
+        {/* Progress Tracker */}
+        <DeliveryProgressTracker currentStep={3} />
+      </ScrollView>
+    </BackgroundGradient>
+  );
+}
+
